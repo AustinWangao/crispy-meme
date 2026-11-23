@@ -134,8 +134,12 @@ function IdentityPanelInner() {
               event.preventDefault();
               run(async () => {
                 const link = await requestMagicLink(email);
-                setPendingToken(link.token);
-                setNotice('登录链接已生成，点击下方按钮完成登录。');
+                setPendingToken(link.token ?? null);
+                setNotice(
+                  link.token
+                    ? '登录链接已生成，点击下方按钮完成登录。'
+                    : `登录链接已发送到 ${email}，请在 15 分钟内打开邮件里的链接。`,
+                );
               });
             }}
           >

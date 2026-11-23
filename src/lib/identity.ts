@@ -29,22 +29,41 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, {
-    ...init,
-    credentials: 'include',
-    headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
-  });
+let csrfToken: string | null = null;
+
+async function getCsrfToken(force = false): Promise<string> {
+  if (csrfToken && !force) return csrfToken;
+  const response = await fetch(`${BASE}/api/auth/csrf`, { credentials: 'include' });
+  if (!response.ok) throw new ApiError(response.status, '无法获取防伪令牌');
+  const data = (await response.json()) as { csrfToken: string };
+  csrfToken = data.csrfToken;
+  return csrfToken;
+}
+
+async function request<T>(path: string, init: RequestInit = {}, retryCsrf = true): Promise<T> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  const unsafe = method !== 'GET' && method !== 'HEAD';
+  const headers: Record<string, string> = {
+    ...(init.body ? { 'content-type': 'application/json' } : {}),
+    ...((init.headers as Record<string, string> | undefined) ?? {}),
+  };
+  if (unsafe) headers['x-csrf-token'] = await getCsrfToken();
+
+  const response = await fetch(`${BASE}${path}`, { ...init, credentials: 'include', headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   if (!response.ok) {
+    if (response.status === 403 && data?.error === 'CSRF_FAILED' && retryCsrf) {
+      csrfToken = null;
+      return request<T>(path, init, false);
+    }
     throw new ApiError(response.status, data?.message ?? '请求失败');
   }
   return data as T;
 }
 
 export function requestMagicLink(email: string) {
-  return request<{ deliveredBy: string; token: string; expiresAt: string }>('/api/auth/magic-link', {
+  return request<{ deliveredBy: string; token?: string; expiresAt: string }>('/api/auth/magic-link', {
     method: 'POST',
     body: JSON.stringify({ email }),
   });

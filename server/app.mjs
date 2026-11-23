@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 const COOKIE = 'replay_session';
+const CSRF_COOKIE = 'replay_csrf';
 const MAGIC_TTL_MS = 15 * 60 * 1000;
 const MAGIC_COOLDOWN_MS = 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -8,6 +9,13 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const nowIso = (ms) => new Date(ms).toISOString();
+
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
 
 function json(res, status, body, headers = {}) {
   const payload = JSON.stringify(body);
@@ -53,11 +61,22 @@ function randomCode() {
   return out;
 }
 
-function sessionCookie(token, maxAgeSeconds) {
-  return `${COOKIE}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+function sessionCookie(token, maxAgeSeconds, secure = false) {
+  return `${COOKIE}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure ? '; Secure' : ''}`;
 }
 
-export function createApp({ db, now = () => Date.now() }) {
+function csrfCookie(token, secure = false) {
+  // 必须可被前端 JS 读取，才能做双提交校验，因此不能加 HttpOnly。
+  return `${CSRF_COOKIE}=${token}; Path=/; SameSite=Lax${secure ? '; Secure' : ''}`;
+}
+
+export function createApp({
+  db,
+  now = () => Date.now(),
+  mailer = { mode: 'dev', appOrigin: '', send: async () => {} },
+  allowedOrigins = [],
+  secureCookies = false,
+}) {
   function findSession(req) {
     const token = parseCookies(req.headers.cookie)[COOKIE];
     if (!token) return null;
@@ -126,7 +145,35 @@ export function createApp({ db, now = () => Date.now() }) {
     return session;
   }
 
+  function consumeLoginToken(token) {
+    const row = db.prepare('select * from auth_tokens where token_hash = ?').get(sha256(token));
+    if (!row || row.used_at || row.expires_at <= now()) {
+      return { error: 'INVALID_TOKEN', message: '登录链接无效或已过期' };
+    }
+    db.prepare('update auth_tokens set used_at = ? where id = ?').run(now(), row.id);
+
+    let actor = db.prepare('select * from actors where email = ?').get(row.email);
+    if (!actor) {
+      const id = crypto.randomUUID();
+      db.prepare(
+        `insert into actors (id, display_name, email, status, created_at)
+         values (?, ?, ?, 'active', ?)`,
+      ).run(id, row.email.split('@')[0], row.email, nowIso(now()));
+      actor = db.prepare('select * from actors where id = ?').get(id);
+    }
+    if (actor.status === 'disabled') return { error: 'ACTOR_DISABLED', message: '该账号已停用' };
+    return { actor };
+  }
+
   const routes = [
+    {
+      method: 'GET',
+      path: ['api', 'auth', 'csrf'],
+      handler: async (req, res) => {
+        const token = crypto.randomBytes(32).toString('base64url');
+        return json(res, 200, { csrfToken: token }, { 'set-cookie': csrfCookie(token, secureCookies) });
+      },
+    },
     {
       method: 'POST',
       path: ['api', 'auth', 'magic-link'],
@@ -151,13 +198,38 @@ export function createApp({ db, now = () => Date.now() }) {
           'insert into auth_tokens (id, email, actor_id, token_hash, expires_at, created_at) values (?, ?, ?, ?, ?, ?)',
         ).run(crypto.randomUUID(), email, existing?.id ?? null, sha256(token), expiresAt, now());
 
-        // 尚未接入邮件服务：开发模式直接返回登录令牌，生产环境必须改为发信。
-        return json(res, 200, {
-          deliveredBy: 'dev-response',
-          token,
-          expiresAt: nowIso(expiresAt),
-          loginUrl: `/api/auth/session?token=${token}`,
+        const loginUrl = `${mailer.appOrigin}/api/auth/login?token=${encodeURIComponent(token)}`;
+        await mailer.send({ to: email, loginUrl, expiresAt: nowIso(expiresAt) });
+
+        if (mailer.mode === 'dev') {
+          // 开发模式没有邮件服务，令牌直接回传，便于本地自测；生产模式绝不返回。
+          return json(res, 200, {
+            deliveredBy: 'dev-response',
+            token,
+            expiresAt: nowIso(expiresAt),
+            loginUrl,
+          });
+        }
+        return json(res, 200, { deliveredBy: 'email', expiresAt: nowIso(expiresAt) });
+      },
+    },
+    {
+      method: 'GET',
+      path: ['api', 'auth', 'login'],
+      handler: async (req, res) => {
+        const url = new URL(req.url, 'http://localhost');
+        const token = url.searchParams.get('token') ?? '';
+        const result = consumeLoginToken(token);
+        const target = `${mailer.appOrigin || ''}/`;
+        if (result.error) {
+          res.writeHead(302, { location: `${target}?login=${result.error === 'ACTOR_DISABLED' ? 'disabled' : 'invalid'}` });
+          return res.end();
+        }
+        res.writeHead(302, {
+          location: `${target}?login=ok`,
+          'set-cookie': sessionCookie(issueSession(result.actor.id), SESSION_TTL_MS / 1000, secureCookies),
         });
+        return res.end();
       },
     },
     {
@@ -165,31 +237,18 @@ export function createApp({ db, now = () => Date.now() }) {
       path: ['api', 'auth', 'session'],
       handler: async (req, res) => {
         const body = await readBody(req);
-        const token = String(body.token ?? '');
-        const row = db.prepare('select * from auth_tokens where token_hash = ?').get(sha256(token));
-        if (!row || row.used_at || row.expires_at <= now()) {
-          return fail(res, 401, 'INVALID_TOKEN', '登录链接无效或已过期');
-        }
+        const result = consumeLoginToken(String(body.token ?? ''));
+        if (result.error) return fail(res, result.error === 'ACTOR_DISABLED' ? 403 : 401, result.error, result.message);
 
-        db.prepare('update auth_tokens set used_at = ? where id = ?').run(now(), row.id);
-
-        let actor = db.prepare('select * from actors where email = ?').get(row.email);
-        if (!actor) {
-          const id = crypto.randomUUID();
-          db.prepare(
-            `insert into actors (id, display_name, email, status, created_at)
-             values (?, ?, ?, 'active', ?)`,
-          ).run(id, row.email.split('@')[0], row.email, nowIso(now()));
-          actor = db.prepare('select * from actors where id = ?').get(id);
-        }
-        if (actor.status === 'disabled') return fail(res, 403, 'ACTOR_DISABLED', '该账号已停用');
-
-        const sessionToken = issueSession(actor.id);
+        const actor = result.actor;
         return json(
           res,
           200,
-          { actor: { actorId: actor.id, displayName: actor.display_name, status: actor.status }, memberships: membershipsOf(actor.id) },
-          { 'set-cookie': sessionCookie(sessionToken, SESSION_TTL_MS / 1000) },
+          {
+            actor: { actorId: actor.id, displayName: actor.display_name, status: actor.status },
+            memberships: membershipsOf(actor.id),
+          },
+          { 'set-cookie': sessionCookie(issueSession(actor.id), SESSION_TTL_MS / 1000, secureCookies) },
         );
       },
     },
@@ -200,7 +259,7 @@ export function createApp({ db, now = () => Date.now() }) {
         const session = requireSession(req, res);
         if (!session) return;
         db.prepare('update sessions set expires_at = ? where id = ?').run(now() + SESSION_TTL_MS, session.sessionId);
-        res.setHeader('set-cookie', sessionCookie(parseCookies(req.headers.cookie)[COOKIE], SESSION_TTL_MS / 1000));
+        res.setHeader('set-cookie', sessionCookie(parseCookies(req.headers.cookie)[COOKIE], SESSION_TTL_MS / 1000, secureCookies));
         return json(res, 200, { actor: actorPayload(session), memberships: membershipsOf(session.actorId) });
       },
     },
@@ -210,7 +269,9 @@ export function createApp({ db, now = () => Date.now() }) {
       handler: async (req, res) => {
         const token = parseCookies(req.headers.cookie)[COOKIE];
         if (token) db.prepare('delete from sessions where token_hash = ?').run(sha256(token));
-        res.writeHead(204, { 'set-cookie': `${COOKIE}=; HttpOnly; Path=/; Max-Age=0` });
+        res.writeHead(204, {
+          'set-cookie': `${COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${secureCookies ? '; Secure' : ''}`,
+        });
         res.end();
       },
     },
@@ -306,7 +367,7 @@ export function createApp({ db, now = () => Date.now() }) {
 
         const project = db.prepare('select id as projectId, name from projects where id = ?').get(row.project_id);
         const headers = {};
-        if (anonymous) headers['set-cookie'] = sessionCookie(issueSession(session.actorId), SESSION_TTL_MS / 1000);
+        if (anonymous) headers['set-cookie'] = sessionCookie(issueSession(session.actorId), SESSION_TTL_MS / 1000, secureCookies);
 
         return json(
           res,
@@ -375,17 +436,52 @@ export function createApp({ db, now = () => Date.now() }) {
     },
   ];
 
+  function originAllowed(req) {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    if (allowedOrigins.includes(origin)) return true;
+
+    let originHost;
+    try {
+      originHost = new URL(origin).host.toLowerCase();
+    } catch {
+      return false;
+    }
+
+    const forwarded = String(req.headers['x-forwarded-host'] ?? '').split(',')[0].trim().toLowerCase();
+    const host = String(req.headers.host ?? '').toLowerCase();
+    return [forwarded, host].filter(Boolean).some((candidate) => sameHost(candidate, originHost));
+  }
+
+  function sameHost(hostHeader, originHost) {
+    if (hostHeader === originHost) return true;
+    // 代理或本机访问时 127.0.0.1 / localhost / [::1] 常被互换，端口一致即视为同源。
+    try {
+      const left = new URL(`http://${hostHeader}`);
+      const right = new URL(`http://${originHost}`);
+      const loopback = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+      return (
+        loopback.has(left.hostname) &&
+        loopback.has(right.hostname) &&
+        left.port === right.port
+      );
+    } catch {
+      return false;
+    }
+  }
+
   return async function handle(req, res) {
     const origin = req.headers.origin;
-    if (origin) {
+    if (origin && originAllowed(req)) {
       res.setHeader('access-control-allow-origin', origin);
       res.setHeader('access-control-allow-credentials', 'true');
       res.setHeader('vary', 'Origin');
     }
     if (req.method === 'OPTIONS') {
+      if (!originAllowed(req)) return fail(res, 403, 'ORIGIN_REJECTED', '来源不被允许');
       res.writeHead(204, {
         'access-control-allow-methods': 'GET,POST,OPTIONS',
-        'access-control-allow-headers': 'content-type',
+        'access-control-allow-headers': 'content-type,x-csrf-token',
         'access-control-max-age': '600',
       });
       return res.end();
@@ -393,6 +489,20 @@ export function createApp({ db, now = () => Date.now() }) {
 
     const url = new URL(req.url, 'http://localhost');
     const parts = url.pathname.split('/').filter(Boolean);
+
+    const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+    if (unsafe) {
+      if (!originAllowed(req)) return fail(res, 403, 'ORIGIN_REJECTED', '来源不被允许');
+      // 只有申请登录链接可以免 CSRF：它不改变服务端权限状态，且发生在新会话之前。
+      const isMagicLink = url.pathname === '/api/auth/magic-link';
+      if (!isMagicLink) {
+        const cookieToken = parseCookies(req.headers.cookie)[CSRF_COOKIE] ?? '';
+        const headerToken = String(req.headers['x-csrf-token'] ?? '');
+        if (!cookieToken || !headerToken || !safeEqual(cookieToken, headerToken)) {
+          return fail(res, 403, 'CSRF_FAILED', '防伪校验失败，请刷新页面后重试');
+        }
+      }
+    }
 
     for (const route of routes) {
       if (route.method !== req.method || route.path.length !== parts.length) continue;

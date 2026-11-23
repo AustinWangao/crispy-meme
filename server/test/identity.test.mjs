@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { openDb } from '../db.mjs';
 import { createApp } from '../app.mjs';
+import { createMailer } from '../mailer.mjs';
 
-async function start() {
+async function start(options = {}) {
   const db = openDb(':memory:');
-  const server = http.createServer(createApp({ db }));
+  const server = http.createServer(createApp({ db, ...options }));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   return {
@@ -19,25 +20,59 @@ async function start() {
   };
 }
 
-function client(base) {
-  let cookie = '';
-  async function call(method, path, body) {
-    const headers = {};
+function client(base, { autoCsrf = true } = {}) {
+  const jar = new Map();
+  let csrf = '';
+
+  function cookieHeader() {
+    return [...jar.entries()].map(([name, value]) => `${name}=${value}`).join('; ');
+  }
+
+  function absorb(response) {
+    for (const raw of response.headers.getSetCookie?.() ?? []) {
+      const [pair, ...attrs] = raw.split(';');
+      const index = pair.indexOf('=');
+      const name = pair.slice(0, index).trim();
+      const value = pair.slice(index + 1).trim();
+      if (attrs.some((attr) => /max-age=0/i.test(attr.trim())) || !value) jar.delete(name);
+      else jar.set(name, value);
+    }
+  }
+
+  async function raw(method, path, body, { redirect, ...extraHeaders } = {}) {
+    const headers = { ...extraHeaders };
     if (body) headers['content-type'] = 'application/json';
-    if (cookie) headers.cookie = cookie;
+    const cookies = cookieHeader();
+    if (cookies) headers.cookie = cookies;
     const response = await fetch(base + path, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
+      redirect,
     });
-    const setCookies = response.headers.getSetCookie?.() ?? [];
-    if (setCookies.length) cookie = setCookies[0].split(';')[0];
+    absorb(response);
     const text = await response.text();
-    return { status: response.status, body: text ? JSON.parse(text) : null };
+    return { status: response.status, headers: response.headers, body: text ? JSON.parse(text) : null };
   }
+
+  async function ensureCsrf() {
+    const response = await raw('GET', '/api/auth/csrf');
+    csrf = response.body.csrfToken;
+    return csrf;
+  }
+
+  async function call(method, path, body, extraHeaders = {}) {
+    const unsafe = method !== 'GET' && method !== 'HEAD';
+    if (unsafe && autoCsrf && !csrf) await ensureCsrf();
+    const headers = unsafe && autoCsrf ? { 'x-csrf-token': csrf, ...extraHeaders } : extraHeaders;
+    return raw(method, path, body, headers);
+  }
+
   return {
-    get: (path) => call('GET', path),
-    post: (path, body) => call('POST', path, body),
+    get: (path, headers) => call('GET', path, undefined, headers),
+    post: (path, body, headers) => call('POST', path, body, headers),
+    ensureCsrf,
+    raw,
   };
 }
 
@@ -216,6 +251,145 @@ test('非项目成员看不到成员名单', async () => {
     const response = await outsider.c.get(`/api/projects/${projectId}/members`);
     assert.equal(response.status, 403);
     assert.equal(response.body.error, 'NOT_A_MEMBER');
+  } finally {
+    await app.close();
+  }
+});
+
+test('生产环境缺少 SMTP 配置时拒绝启动', () => {
+  assert.throws(() => createMailer({ NODE_ENV: 'production' }), /SMTP_URL/);
+});
+
+test('SMTP 模式通过邮件发送登录链接，响应不返回令牌', async () => {
+  const sent = [];
+  const mailer = createMailer(
+    {
+      SMTP_URL: 'smtp://user:pass@smtp.example.com:587',
+      MAIL_FROM: 'no-reply@replay.test',
+      APP_ORIGIN: 'https://replay.test',
+    },
+    { transportFactory: () => ({ sendMail: async (message) => sent.push(message) }) },
+  );
+  const app = await start({ mailer });
+  try {
+    const c = client(app.base);
+    const link = await c.post('/api/auth/magic-link', { email: 'smtp@example.com' });
+    assert.equal(link.status, 200);
+    assert.equal(link.body.deliveredBy, 'email');
+    assert.equal(link.body.token, undefined);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, 'smtp@example.com');
+    assert.match(sent[0].text, /https:\/\/replay\.test\/api\/auth\/login\?token=/);
+
+    const token = sent[0].text.match(/token=([A-Za-z0-9_-]+)/)[1];
+    const login = await c.post('/api/auth/session', { token });
+    assert.equal(login.status, 200);
+    assert.equal(login.body.actor.displayName, 'smtp');
+  } finally {
+    await app.close();
+  }
+});
+
+test('邮件里的登录链接可直接完成登录并跳回应用', async () => {
+  const app = await start({ mailer: { mode: 'dev', appOrigin: 'https://replay.test', send: async () => {} } });
+  try {
+    const c = client(app.base);
+    const link = await c.post('/api/auth/magic-link', { email: 'link@example.com' });
+    const target = `${app.base}/api/auth/login?token=${encodeURIComponent(link.body.token)}`;
+
+    const first = await fetch(target, { redirect: 'manual' });
+    assert.equal(first.status, 302);
+    assert.equal(first.headers.get('location'), 'https://replay.test/?login=ok');
+    assert.match(first.headers.getSetCookie()[0], /replay_session=/);
+
+    const second = await fetch(target, { redirect: 'manual' });
+    assert.equal(second.headers.get('location'), 'https://replay.test/?login=invalid');
+  } finally {
+    await app.close();
+  }
+});
+
+test('缺少 CSRF 头的写请求被拒绝，但申请登录链接不受影响', async () => {
+  const app = await start();
+  try {
+    const c = client(app.base, { autoCsrf: false });
+    const denied = await c.post('/api/projects', { name: '无令牌' });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error, 'CSRF_FAILED');
+    assert.equal((await c.post('/api/auth/magic-link', { email: 'nocsrf@example.com' })).status, 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test('CSRF 头与 Cookie 不一致时拒绝写入', async () => {
+  const app = await start();
+  try {
+    const c = client(app.base, { autoCsrf: false });
+    await c.ensureCsrf();
+    const denied = await c.post('/api/projects', { name: '错令牌' }, { 'x-csrf-token': 'wrong-token' });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error, 'CSRF_FAILED');
+  } finally {
+    await app.close();
+  }
+});
+
+test('跨站 Origin 的写请求被拒绝', async () => {
+  const app = await start();
+  try {
+    const c = client(app.base);
+    const denied = await c.post('/api/auth/magic-link', { email: 'origin@example.com' }, { origin: 'https://evil.example' });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error, 'ORIGIN_REJECTED');
+  } finally {
+    await app.close();
+  }
+});
+
+test('生产 Cookie 模式会为会话与 CSRF Cookie 加 Secure', async () => {
+  const app = await start({ secureCookies: true });
+  try {
+    const c = client(app.base);
+    const link = await c.post('/api/auth/magic-link', { email: 'secure@example.com' });
+    const login = await c.post('/api/auth/session', { token: link.body.token });
+    assert.match(login.headers.getSetCookie()[0], /; Secure/);
+
+    const csrf = await c.get('/api/auth/csrf');
+    const csrfCookie = csrf.headers.getSetCookie()[0];
+    assert.match(csrfCookie, /; Secure/);
+    assert.doesNotMatch(csrfCookie, /HttpOnly/);
+  } finally {
+    await app.close();
+  }
+});
+
+test('本机回环别名（localhost 与 127.0.0.1）不被 Origin 校验误拦', async () => {
+  const app = await start();
+  try {
+    const port = new URL(app.base).port;
+    const c = client(app.base);
+    const response = await c.post(
+      '/api/auth/magic-link',
+      { email: 'loopback@example.com' },
+      { origin: `http://localhost:${port}` },
+    );
+    assert.equal(response.status, 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test('信任代理转发的 x-forwarded-host', async () => {
+  const app = await start();
+  try {
+    const c = client(app.base);
+    const response = await c.post(
+      '/api/auth/magic-link',
+      { email: 'forwarded@example.com' },
+      { origin: 'https://app.example.com', 'x-forwarded-host': 'app.example.com' },
+    );
+    assert.equal(response.status, 200);
   } finally {
     await app.close();
   }

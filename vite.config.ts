@@ -4,10 +4,14 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: {
-    proxy: { '/api': 'http://127.0.0.1:8787' },
+    proxy: {
+      '/api': { target: 'http://127.0.0.1:8787', changeOrigin: false, xfwd: true },
+    },
   },
   preview: {
-    proxy: { '/api': 'http://127.0.0.1:8787' },
+    proxy: {
+      '/api': { target: 'http://127.0.0.1:8787', changeOrigin: false, xfwd: true },
+    },
   },
   test: {
     environment: 'jsdom',
