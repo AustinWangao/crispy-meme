@@ -42,6 +42,27 @@ export interface Disposition {
   nextAction: string;
 }
 
+export type ActorRole = 'creator' | 'tester' | 'observer';
+
+export interface AuthorSnapshot {
+  actorId: string;
+  displayName: string;
+  role: ActorRole;
+  verifiedBuildId?: string;
+}
+
+export const LOCAL_ACTOR_ID = 'actor-local';
+
+export function makeAuthor(displayName: string, role: ActorRole, verifiedBuildId?: string): AuthorSnapshot {
+  const name = displayName.trim() || '匿名';
+  return {
+    actorId: role === 'creator' ? LOCAL_ACTOR_ID : `tester:${name}`,
+    displayName: name,
+    role,
+    ...(verifiedBuildId ? { verifiedBuildId } : {}),
+  };
+}
+
 export interface Issue {
   id: string;
   projectId: string;
@@ -56,7 +77,7 @@ export interface Issue {
   recommendation: string;
   occurrenceCount: number;
   occurrenceTotal: number;
-  testerName: string;
+  author: AuthorSnapshot;
   createdAt: string;
   draft?: boolean;
   disposition: Disposition;
@@ -77,7 +98,7 @@ export interface Reply {
   issueId: string;
   projectId: string;
   buildId: string;
-  author: string;
+  author: AuthorSnapshot;
   body: string;
   createdAt: string;
 }
@@ -242,9 +263,36 @@ export function parseStoredState(raw: string | null, fallback: AppState): AppSta
     if (!keys.every((key) => Array.isArray(parsed[key]))) return fallback;
     return {
       ...(parsed as AppState),
-      replies: Array.isArray(parsed.replies) ? parsed.replies : [],
+      issues: (parsed.issues as unknown[]).map((issue) => normalizeIssue(issue as Record<string, unknown>)),
+      replies: (Array.isArray(parsed.replies) ? parsed.replies : []).map((reply) =>
+        normalizeReply(reply as unknown as Record<string, unknown>),
+      ),
     };
   } catch {
     return fallback;
   }
+}
+
+function legacyAuthor(displayName: string): AuthorSnapshot {
+  const name = displayName.trim() || '匿名';
+  return { actorId: `legacy:${name}`, displayName: name, role: 'tester' };
+}
+
+function normalizeIssue(raw: Record<string, unknown>): Issue {
+  const rest = { ...raw };
+  delete rest.testerName;
+  const author = raw.author as AuthorSnapshot | undefined;
+  if (author && typeof author === 'object' && typeof author.displayName === 'string') {
+    return { ...(rest as unknown as Issue), author };
+  }
+  return {
+    ...(rest as unknown as Issue),
+    author: legacyAuthor(typeof raw.testerName === 'string' ? raw.testerName : ''),
+  };
+}
+
+function normalizeReply(raw: Record<string, unknown>): Reply {
+  const author = raw.author;
+  if (author && typeof author === 'object') return raw as unknown as Reply;
+  return { ...(raw as unknown as Reply), author: legacyAuthor(typeof author === 'string' ? author : '') };
 }

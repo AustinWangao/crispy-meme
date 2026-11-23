@@ -23,6 +23,7 @@ import {
   appReducer,
   emptyState,
   getDashboardMetrics,
+  makeAuthor,
   parseStoredState,
   validateDisposition,
   validateIssueDraft,
@@ -71,6 +72,12 @@ const severityLabels: Record<Severity, string> = {
   minor: '一般',
   preference: '偏好',
 };
+
+const roleLabels = {
+  creator: '作者',
+  tester: '试玩者',
+  observer: '旁观者',
+} as const;
 
 const outcomeLabels: Record<RetestOutcome, string> = {
   pending: '待复测',
@@ -301,7 +308,7 @@ function IssueForm({ onSave }: { onSave: (issue: Omit<Issue, 'id' | 'projectId' 
       recommendation: formValue(data, 'recommendation'),
       occurrenceCount: Number(data.get('occurrenceCount')),
       occurrenceTotal: Number(data.get('occurrenceTotal')),
-      testerName: formValue(data, 'testerName'),
+      author: makeAuthor(formValue(data, 'testerName'), 'tester'),
       disposition: { decision: 'pending', reason: '', nextAction: '' },
     });
   };
@@ -368,7 +375,7 @@ function IssueForm({ onSave }: { onSave: (issue: Omit<Issue, 'id' | 'projectId' 
 
 type ThreadPayload = Pick<
   Issue,
-  'title' | 'category' | 'severity' | 'observation' | 'evidence' | 'interpretation' | 'testerName' | 'draft'
+  'title' | 'category' | 'severity' | 'observation' | 'evidence' | 'interpretation' | 'author' | 'draft'
 >;
 
 function ThreadForm({ initial, onSave }: { initial?: Issue; onSave: (payload: ThreadPayload) => void }) {
@@ -386,7 +393,7 @@ function ThreadForm({ initial, onSave }: { initial?: Issue; onSave: (payload: Th
       observation: formValue(data, 'observation'),
       evidence: formValue(data, 'evidence'),
       interpretation: formValue(data, 'interpretation'),
-      testerName: formValue(data, 'testerName') || '匿名',
+      author: makeAuthor(formValue(data, 'testerName'), 'tester'),
       draft,
     };
     const nextErrors = draft ? validateIssueDraftBase(payload) : validateIssueDraft(payload);
@@ -434,7 +441,7 @@ function ThreadForm({ initial, onSave }: { initial?: Issue; onSave: (payload: Th
       </div>
       <div className="field field-full">
         <label htmlFor="thread-tester">测试者</label>
-        <input id="thread-tester" name="testerName" defaultValue={initial?.testerName} placeholder="姓名或匿名编号" />
+        <input id="thread-tester" name="testerName" defaultValue={initial?.author.displayName} placeholder="姓名或匿名编号" />
       </div>
       <div className="form-actions field-full">
         <span>没有原始证据只能存为草稿</span>
@@ -648,7 +655,7 @@ function App() {
         issueId,
         projectId: selectedProject.id,
         buildId: selectedBuild.id,
-        author: '我',
+        author: makeAuthor('我', 'creator'),
         body,
         createdAt: new Date().toISOString(),
       },
@@ -854,7 +861,7 @@ function App() {
                   {issue.draft ? <StatusChip tone="neutral">草稿</StatusChip> : <StatusChip tone={issue.severity === 'blocker' || issue.severity === 'major' ? 'red' : 'neutral'}>{severityLabels[issue.severity]}</StatusChip>}
                   {!issue.draft && <StatusChip tone={issue.disposition.decision === 'accepted' ? 'green' : issue.disposition.decision === 'pending' ? 'orange' : 'neutral'}>{decisionLabels[issue.disposition.decision]}</StatusChip>}
                   <span>{issue.category}</span>
-                  <span>{issue.testerName || '匿名'}</span>
+                  <span>{roleLabels[issue.author.role]} · {issue.author.displayName}</span>
                 </div>
                 <h3>{issue.title}</h3>
                 <div className="evidence-grid">
@@ -891,7 +898,7 @@ function App() {
                     </div>
                     {(repliesByIssue.get(issue.id) ?? []).map((reply) => (
                       <div className="reply-item" key={reply.id}>
-                        <div className="reply-item-head"><strong>{reply.author}</strong><span>{formatDate(reply.createdAt)}</span></div>
+                        <div className="reply-item-head"><strong>{reply.author.displayName}</strong><span>{roleLabels[reply.author.role]} · {formatDate(reply.createdAt)}</span></div>
                         <p>{reply.body}</p>
                       </div>
                     ))}
@@ -966,7 +973,7 @@ function App() {
                 {currentIssues.map((issue) => (
                   <article className="issue-card" key={issue.id}>
                     <div className="issue-heading">
-                      <div><div className="issue-meta"><StatusChip tone={issue.severity === 'blocker' || issue.severity === 'major' ? 'red' : 'neutral'}>{severityLabels[issue.severity]}</StatusChip><span>{issue.category}</span><span>{issue.testerName}</span></div><h3>{issue.title}</h3></div>
+                      <div><div className="issue-meta"><StatusChip tone={issue.severity === 'blocker' || issue.severity === 'major' ? 'red' : 'neutral'}>{severityLabels[issue.severity]}</StatusChip><span>{issue.category}</span><span>{roleLabels[issue.author.role]} · {issue.author.displayName}</span></div><h3>{issue.title}</h3></div>
                       <StatusChip tone={issue.disposition.decision === 'accepted' ? 'green' : issue.disposition.decision === 'pending' ? 'orange' : 'neutral'}>{decisionLabels[issue.disposition.decision]}</StatusChip>
                     </div>
                     <div className="evidence-grid">

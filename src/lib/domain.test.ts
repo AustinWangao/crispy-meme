@@ -3,6 +3,7 @@ import {
   appReducer,
   getBuildComparison,
   getDashboardMetrics,
+  makeAuthor,
   parseStoredState,
   validateDisposition,
   validateIssueDraft,
@@ -63,7 +64,7 @@ function makeIssue(id: string, decision: 'pending' | 'accepted' = 'pending'): Is
     recommendation: '下一轮只调整节点反馈，再观察同一任务。',
     occurrenceCount: 1,
     occurrenceTotal: 1,
-    testerName: '测试者 A',
+    author: makeAuthor('测试者 A', 'tester'),
     createdAt: '2026-11-03T09:00:00.000Z',
     disposition: {
       decision,
@@ -221,7 +222,7 @@ describe('项目内讨论：版本时间线与证据帖', () => {
       issueId: 'issue-1',
       projectId: project.id,
       buildId: firstBuild.id,
-      author: '我',
+      author: makeAuthor('我', 'creator'),
       body: '同一场景第二次测试也停在这里',
       createdAt: '2026-11-04T09:00:00.000Z',
     };
@@ -232,6 +233,38 @@ describe('项目内讨论：版本时间线与证据帖', () => {
     const legacy = JSON.stringify({ ...baseState(), replies: undefined });
     expect(parseStoredState(legacy, emptyLegacyState()).replies).toEqual([]);
     expect(parseStoredState(JSON.stringify(state), baseState()).replies).toHaveLength(1);
+  });
+
+  it('旧缓存的 testerName 与字符串署名迁移成作者快照', () => {
+    const legacyIssue = {
+      ...makeIssue('issue-1'),
+      author: undefined,
+      testerName: '测试者 A',
+    } as unknown as Issue;
+    const legacyReply = {
+      id: 'reply-legacy',
+      issueId: 'issue-1',
+      projectId: project.id,
+      buildId: firstBuild.id,
+      author: '我',
+      body: '看这里',
+      createdAt: '2026-11-04T09:00:00.000Z',
+    } as unknown as Reply;
+    const legacyState: AppState = { ...baseState(), issues: [legacyIssue], replies: [legacyReply] };
+
+    const parsed = parseStoredState(JSON.stringify(legacyState), baseState());
+
+    expect(parsed.issues[0].author).toEqual({
+      actorId: 'legacy:测试者 A',
+      displayName: '测试者 A',
+      role: 'tester',
+    });
+    expect((parsed.issues[0] as unknown as { testerName?: string }).testerName).toBeUndefined();
+    expect(parsed.replies[0].author).toEqual({
+      actorId: 'legacy:我',
+      displayName: '我',
+      role: 'tester',
+    });
   });
 });
 
