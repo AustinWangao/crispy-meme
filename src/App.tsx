@@ -543,6 +543,64 @@ function App() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('seed') !== 'playtest') return;
+    if (window.sessionStorage.getItem('seed-playtest') === 'done') return;
+    window.sessionStorage.setItem('seed-playtest', 'done');
+
+    params.delete('seed');
+    const search = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${search ? `?${search}` : ''}`);
+
+    const now = new Date().toISOString();
+    const existing = state.projects.find((project) => project.name.includes('奥觅'));
+    const projectId = existing?.id ?? createId('project');
+    if (!existing) {
+      dispatch({
+        type: 'project/add',
+        project: {
+          id: projectId,
+          name: '奥觅',
+          genre: '解谜益智',
+          summary: '星屑灯阵 · 首个可玩原型',
+          targetPlayer: '中学生',
+          intendedExperience: '益智测试',
+          createdAt: now,
+        },
+      });
+    }
+
+    let build = state.builds.find((item) => item.projectId === projectId && item.version === '0.1.0');
+    if (!build) {
+      build = {
+        id: createId('build'),
+        projectId,
+        version: '0.1.0',
+        url: `${window.location.origin}/playtest/`,
+        notes: '首个可玩原型：4×4 星屑灯阵，点击翻转自身与上下左右，3 关递进，目标为熄灭全部灯光；暂无撤销与计时。',
+        addressedIssueIds: [],
+        createdAt: now,
+      };
+      dispatch({ type: 'build/add', build });
+    }
+
+    if (!state.playtests.some((item) => item.title === '星屑灯阵 · 首次体验测试')) {
+      const playtest: Playtest = {
+        id: createId('playtest'),
+        projectId,
+        buildId: build.id,
+        title: '星屑灯阵 · 首次体验测试',
+        objective: '验证中学生不看解释能否理解目标与操作，并完成第一关',
+        task: '打开游戏链接，不看作者说明，尝试完成第一关；如果卡住，记下卡住前你在想什么。',
+        targetCount: 3,
+        status: 'running',
+        createdAt: now,
+      };
+      dispatch({ type: 'playtest/add', playtest });
+    }
+  }, []);
+
   const selectedProject = state.projects.find((project) => project.id === selectedProjectId) ?? state.projects[0];
   const projectBuilds = selectedProject ? state.builds.filter((build) => build.projectId === selectedProject.id) : [];
   const selectedBuild = projectBuilds.find((build) => build.id === selectedBuildId) ?? projectBuilds[0];
