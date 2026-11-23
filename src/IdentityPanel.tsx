@@ -17,6 +17,11 @@ export function IdentityPanel() {
   return <IdentityPanelInner />;
 }
 
+// 身份变化后通知同一页面上的其他身份面板（如服务端证据帖）重新拉取会话。
+function announceIdentityChange() {
+  window.dispatchEvent(new Event('replay-identity-changed'));
+}
+
 function IdentityPanelInner() {
   const [actor, setActor] = useState<IdentityActor | null>(null);
   const [memberships, setMemberships] = useState<IdentityMembership[]>([]);
@@ -94,6 +99,7 @@ function IdentityPanelInner() {
                 setActor(null);
                 setMemberships([]);
                 setNotice(null);
+                announceIdentityChange();
               })
             }
           >
@@ -109,6 +115,7 @@ function IdentityPanelInner() {
                 if (session) setMemberships(session.memberships);
                 setProjectName('');
                 setNotice(`已创建「${created.name}」，你现在是作者`);
+                announceIdentityChange();
               });
             }}
           >
@@ -169,6 +176,7 @@ function IdentityPanelInner() {
                   setMemberships(session.memberships);
                   setPendingToken(null);
                   setNotice(null);
+                  announceIdentityChange();
                 })
               }
             >
@@ -191,6 +199,7 @@ function IdentityPanelInner() {
             }
             setCode('');
             setNotice(`已加入「${result.project.name}」${result.anonymous ? '，当前为匿名试玩者' : ''}`);
+            announceIdentityChange();
           });
         }}
       >

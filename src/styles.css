@@ -500,3 +500,6 @@ dd { margin: 6px 0 0; font-size: 13px; line-height: 1.65; }
 .reply-form textarea { display: block; width: 100%; padding: 10px 12px; border: 1px solid #d2d7ce; border-radius: 7px; color: var(--ink); background: #fff; font: inherit; font-size: 13px; line-height: 1.6; resize: vertical; }
 .reply-form textarea:focus { outline: 2px solid #c7d8cb; outline-offset: 1px; }
 .reply-form-actions { display: flex; gap: 8px; margin-top: 8px; }
+.server-posts { margin-top: 18px; }
+.server-post-form { margin: 14px 0 18px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
+.server-decision-form { margin-top: 14px; padding: 14px 16px; border: 1px dashed #c6cfc4; border-radius: 8px; background: #fff; }

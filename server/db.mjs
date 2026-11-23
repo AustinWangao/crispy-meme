@@ -79,6 +79,45 @@ create table if not exists membership_events (
   actor_by   text not null,
   created_at text not null
 );
+
+create table if not exists posts (
+  id                      text primary key,
+  project_id              text not null references projects (id),
+  build_id                text,
+  author_actor_id         text not null references actors (id),
+  author_display_name     text not null,
+  author_role_at_post     text not null check (author_role_at_post in ('creator', 'tester', 'observer')),
+  title                   text not null,
+  category                text not null,
+  severity                text not null check (severity in ('blocker', 'major', 'minor', 'preference')),
+  observation             text not null,
+  evidence                text not null default '',
+  interpretation          text not null default '',
+  draft                   integer not null default 0 check (draft in (0, 1)),
+  disposition_decision    text not null default 'pending' check (disposition_decision in ('pending', 'accepted', 'deferred', 'rejected')),
+  disposition_reason      text not null default '',
+  disposition_next_action text not null default '',
+  disposition_by          text references actors (id),
+  disposition_at          text,
+  created_at              text not null,
+  updated_at              text not null
+);
+
+create index if not exists posts_project_created
+  on posts (project_id, created_at);
+
+create table if not exists post_replies (
+  id                   text primary key,
+  post_id              text not null references posts (id),
+  author_actor_id      text not null references actors (id),
+  author_display_name  text not null,
+  author_role_at_reply text not null check (author_role_at_reply in ('creator', 'tester', 'observer')),
+  body                 text not null,
+  created_at           text not null
+);
+
+create index if not exists post_replies_post_created
+  on post_replies (post_id, created_at);
 `;
 
 export function openDb(file = 'data/replay.sqlite') {

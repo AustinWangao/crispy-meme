@@ -119,3 +119,78 @@ export function redeemCode(code: string) {
     body: JSON.stringify({}),
   });
 }
+
+export type PostCategory = '功能缺陷' | '目标与规则' | '操作与反馈' | '难度与节奏' | '玩家体验' | '玩法偏好';
+export type PostSeverity = 'blocker' | 'major' | 'minor' | 'preference';
+export type PostDecision = 'pending' | 'accepted' | 'deferred' | 'rejected';
+
+export interface ServerPostAuthor {
+  actorId: string;
+  displayName: string;
+  role: 'creator' | 'tester' | 'observer';
+}
+
+export interface ServerPostReply {
+  replyId: string;
+  postId: string;
+  author: ServerPostAuthor;
+  body: string;
+  createdAt: string;
+}
+
+export interface ServerPost {
+  postId: string;
+  projectId: string;
+  buildId: string | null;
+  title: string;
+  category: PostCategory;
+  severity: PostSeverity;
+  observation: string;
+  evidence: string;
+  interpretation: string;
+  draft: boolean;
+  author: ServerPostAuthor;
+  disposition: { decision: PostDecision; reason: string; nextAction: string };
+  createdAt: string;
+  updatedAt: string;
+  replies: ServerPostReply[];
+}
+
+export interface NewPostInput {
+  title: string;
+  category: PostCategory;
+  severity: PostSeverity;
+  observation: string;
+  evidence: string;
+  interpretation: string;
+  buildId?: string;
+  draft: boolean;
+}
+
+export function listProjectPosts(projectId: string) {
+  return request<{ projectId: string; posts: ServerPost[] }>(`/api/projects/${projectId}/posts`);
+}
+
+export function createPost(projectId: string, input: NewPostInput) {
+  return request<{ post: ServerPost }>(`/api/projects/${projectId}/posts`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function setPostDisposition(
+  postId: string,
+  input: { decision: Exclude<PostDecision, 'pending'>; reason: string; nextAction: string },
+) {
+  return request<{ post: ServerPost }>(`/api/posts/${postId}/disposition`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export function createPostReply(postId: string, body: string) {
+  return request<{ reply: ServerPostReply }>(`/api/posts/${postId}/replies`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  });
+}

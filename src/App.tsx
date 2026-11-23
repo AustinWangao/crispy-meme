@@ -41,6 +41,8 @@ import {
   type Severity,
 } from './lib/domain';
 import { IdentityPanel } from './IdentityPanel';
+import { ServerPosts } from './ServerPosts';
+import { identityEnabled } from './lib/identity';
 
 const STORAGE_KEY = 'replay-state-v1';
 type View = 'overview' | 'builds' | 'playtests' | 'retests';
@@ -774,12 +776,15 @@ function App() {
     if (!selectedProject) return null;
     if (projectBuilds.length === 0) {
       return (
-        <EmptyState
-          icon={<FolderKanban size={28} />}
-          title="先保存首个可玩版本"
-          description="每条试玩证据都会绑定到具体版本，避免不同构建的反馈混在一起。"
-          action={<button className="button button-primary" type="button" onClick={() => setModal({ type: 'build', next: false })}><Plus size={18} />添加首个版本</button>}
-        />
+        <>
+          <EmptyState
+            icon={<FolderKanban size={28} />}
+            title="先保存首个可玩版本"
+            description="每条试玩证据都会绑定到具体版本，避免不同构建的反馈混在一起。"
+            action={<button className="button button-primary" type="button" onClick={() => setModal({ type: 'build', next: false })}><Plus size={18} />添加首个版本</button>}
+          />
+          {identityEnabled && <ServerPosts />}
+        </>
       );
     }
 
@@ -919,6 +924,7 @@ function App() {
           </div>
         )}
       </section>
+      {identityEnabled && <ServerPosts />}
       </>
     );
   };

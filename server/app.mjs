@@ -6,6 +6,8 @@ const MAGIC_TTL_MS = 15 * 60 * 1000;
 const MAGIC_COOLDOWN_MS = 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const POST_CATEGORIES = ['功能缺陷', '目标与规则', '操作与反馈', '难度与节奏', '玩家体验', '玩法偏好'];
+const POST_SEVERITIES = ['blocker', 'major', 'minor', 'preference'];
 
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const nowIso = (ms) => new Date(ms).toISOString();
@@ -68,6 +70,78 @@ function sessionCookie(token, maxAgeSeconds, secure = false) {
 function csrfCookie(token, secure = false) {
   // 必须可被前端 JS 读取，才能做双提交校验，因此不能加 HttpOnly。
   return `${CSRF_COOKIE}=${token}; Path=/; SameSite=Lax${secure ? '; Secure' : ''}`;
+}
+
+function parsePostInput(body, { requireEvidence }) {
+  const title = String(body.title ?? '').trim();
+  if (!title) return { error: ['INVALID_TITLE', '帖子标题不能为空'] };
+  if (title.length > 120) return { error: ['INVALID_TITLE', '标题最多 120 个字符'] };
+
+  const observation = String(body.observation ?? '').trim();
+  if (!observation) return { error: ['INVALID_OBSERVATION', '请填写实际观察，而不是修改建议'] };
+  if (observation.length > 4000) return { error: ['INVALID_OBSERVATION', '实际观察最多 4000 个字符'] };
+
+  const evidence = String(body.evidence ?? '').trim();
+  if (requireEvidence && !evidence) {
+    return { error: ['EVIDENCE_REQUIRED', '发布证据帖必须提供原始证据，没有证据请先存为草稿'] };
+  }
+  if (evidence.length > 4000) return { error: ['INVALID_EVIDENCE', '原始证据最多 4000 个字符'] };
+
+  const interpretation = String(body.interpretation ?? '').trim();
+  if (interpretation.length > 2000) return { error: ['INVALID_INTERPRETATION', '解释假设最多 2000 个字符'] };
+
+  const category = String(body.category ?? '目标与规则');
+  if (!POST_CATEGORIES.includes(category)) return { error: ['INVALID_CATEGORY', '问题类型不合法'] };
+
+  const severity = String(body.severity ?? 'major');
+  if (!POST_SEVERITIES.includes(severity)) return { error: ['INVALID_SEVERITY', '影响程度不合法'] };
+
+  const buildId = body.buildId == null || String(body.buildId).trim() === '' ? null : String(body.buildId).trim();
+  if (buildId && buildId.length > 120) return { error: ['INVALID_BUILD', '版本标识最多 120 个字符'] };
+
+  return { value: { title, observation, evidence, interpretation, category, severity, buildId } };
+}
+
+function postPayload(row, replies = []) {
+  return {
+    postId: row.id,
+    projectId: row.project_id,
+    buildId: row.build_id,
+    title: row.title,
+    category: row.category,
+    severity: row.severity,
+    observation: row.observation,
+    evidence: row.evidence,
+    interpretation: row.interpretation,
+    draft: Boolean(row.draft),
+    author: {
+      actorId: row.author_actor_id,
+      displayName: row.author_display_name,
+      role: row.author_role_at_post,
+    },
+    disposition: {
+      decision: row.disposition_decision,
+      reason: row.disposition_reason,
+      nextAction: row.disposition_next_action,
+    },
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    replies,
+  };
+}
+
+function replyPayload(row) {
+  return {
+    replyId: row.id,
+    postId: row.post_id,
+    author: {
+      actorId: row.author_actor_id,
+      displayName: row.author_display_name,
+      role: row.author_role_at_reply,
+    },
+    body: row.body,
+    createdAt: row.created_at,
+  };
 }
 
 export function createApp({
@@ -143,6 +217,19 @@ export function createApp({
       return null;
     }
     return session;
+  }
+
+  function requireMember(req, res, projectId) {
+    const session = requireSession(req, res);
+    if (!session) return null;
+    const membership = db
+      .prepare(`select role from project_members where project_id = ? and actor_id = ? and status = 'active'`)
+      .get(projectId, session.actorId);
+    if (!membership) {
+      fail(res, 403, 'NOT_A_MEMBER', '你不是该项目成员');
+      return null;
+    }
+    return { session, membership };
   }
 
   function consumeLoginToken(token) {
@@ -434,6 +521,163 @@ export function createApp({
         return json(res, 200, { projectId, role: membership.role, members });
       },
     },
+    {
+      method: 'POST',
+      path: ['api', 'projects', null, 'posts'],
+      handler: async (req, res, params) => {
+        const projectId = params[0];
+        const auth = requireMember(req, res, projectId);
+        if (!auth) return;
+
+        const body = await readBody(req);
+        const draft = Boolean(body.draft);
+        const parsed = parsePostInput(body, { requireEvidence: !draft });
+        if (parsed.error) return fail(res, 422, parsed.error[0], parsed.error[1]);
+
+        const { session, membership } = auth;
+        const id = crypto.randomUUID();
+        const createdAt = nowIso(now());
+        db.prepare(
+          `insert into posts (
+             id, project_id, build_id, author_actor_id, author_display_name, author_role_at_post,
+             title, category, severity, observation, evidence, interpretation, draft,
+             disposition_decision, disposition_reason, disposition_next_action, created_at, updated_at
+           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', '', ?, ?)`,
+        ).run(
+          id,
+          projectId,
+          parsed.value.buildId,
+          session.actorId,
+          session.displayName,
+          membership.role,
+          parsed.value.title,
+          parsed.value.category,
+          parsed.value.severity,
+          parsed.value.observation,
+          parsed.value.evidence,
+          parsed.value.interpretation,
+          draft ? 1 : 0,
+          createdAt,
+          createdAt,
+        );
+
+        const row = db.prepare('select * from posts where id = ?').get(id);
+        return json(res, 201, { post: postPayload(row) });
+      },
+    },
+    {
+      method: 'GET',
+      path: ['api', 'projects', null, 'posts'],
+      handler: async (req, res, params) => {
+        const projectId = params[0];
+        const auth = requireMember(req, res, projectId);
+        if (!auth) return;
+
+        const url = new URL(req.url, 'http://localhost');
+        const buildId = url.searchParams.get('buildId');
+        const rows = buildId
+          ? db
+              .prepare('select * from posts where project_id = ? and build_id = ? order by created_at desc')
+              .all(projectId, buildId)
+          : db.prepare('select * from posts where project_id = ? order by created_at desc').all(projectId);
+
+        const repliesByPost = new Map();
+        for (const reply of db
+          .prepare(
+            `select r.* from post_replies r join posts p on p.id = r.post_id
+              where p.project_id = ? order by r.created_at`,
+          )
+          .all(projectId)) {
+          repliesByPost.set(reply.post_id, [...(repliesByPost.get(reply.post_id) ?? []), replyPayload(reply)]);
+        }
+
+        return json(res, 200, {
+          projectId,
+          buildId: buildId ?? null,
+          posts: rows.map((row) => postPayload(row, repliesByPost.get(row.id) ?? [])),
+        });
+      },
+    },
+    {
+      method: 'PATCH',
+      path: ['api', 'posts', null, 'disposition'],
+      handler: async (req, res, params) => {
+        const post = db.prepare('select * from posts where id = ?').get(params[0]);
+        if (!post) return fail(res, 404, 'POST_NOT_FOUND', '帖子不存在');
+
+        const session = requireCreator(req, res, post.project_id);
+        if (!session) return;
+        if (post.draft) return fail(res, 409, 'POST_IS_DRAFT', '草稿需要先发布才能处置');
+
+        const body = await readBody(req);
+        const decision = String(body.decision ?? '');
+        if (!['accepted', 'deferred', 'rejected'].includes(decision)) {
+          return fail(res, 422, 'INVALID_DECISION', '处置决定不合法');
+        }
+        const reason = String(body.reason ?? '').trim();
+        const nextAction = String(body.nextAction ?? '').trim();
+        if (decision === 'accepted' && !nextAction) {
+          return fail(res, 422, 'NEXT_ACTION_REQUIRED', '采纳时必须填写下一版动作');
+        }
+        if (decision !== 'accepted' && !reason) {
+          return fail(res, 422, 'REASON_REQUIRED', '搁置或拒绝时必须填写理由');
+        }
+
+        db.prepare(
+          `update posts
+              set disposition_decision = ?, disposition_reason = ?, disposition_next_action = ?,
+                  disposition_by = ?, disposition_at = ?, updated_at = ?
+            where id = ?`,
+        ).run(decision, reason, nextAction, session.actorId, nowIso(now()), nowIso(now()), post.id);
+
+        const row = db.prepare('select * from posts where id = ?').get(post.id);
+        const replies = db
+          .prepare('select * from post_replies where post_id = ? order by created_at')
+          .all(post.id)
+          .map(replyPayload);
+        return json(res, 200, { post: postPayload(row, replies) });
+      },
+    },
+    {
+      method: 'POST',
+      path: ['api', 'posts', null, 'replies'],
+      handler: async (req, res, params) => {
+        const post = db.prepare('select id, project_id, draft from posts where id = ?').get(params[0]);
+        if (!post) return fail(res, 404, 'POST_NOT_FOUND', '帖子不存在');
+
+        const auth = requireMember(req, res, post.project_id);
+        if (!auth) return;
+        if (post.draft) return fail(res, 409, 'POST_IS_DRAFT', '草稿未发布，不能回复');
+
+        const body = await readBody(req);
+        const text = String(body.body ?? '').trim();
+        if (!text) return fail(res, 422, 'INVALID_REPLY', '回复内容不能为空');
+        if (text.length > 4000) return fail(res, 422, 'INVALID_REPLY', '回复最多 4000 个字符');
+
+        const id = crypto.randomUUID();
+        db.prepare(
+          `insert into post_replies (id, post_id, author_actor_id, author_display_name, author_role_at_reply, body, created_at)
+           values (?, ?, ?, ?, ?, ?, ?)`,
+        ).run(id, post.id, auth.session.actorId, auth.session.displayName, auth.membership.role, text, nowIso(now()));
+
+        const row = db.prepare('select * from post_replies where id = ?').get(id);
+        return json(res, 201, { reply: replyPayload(row) });
+      },
+    },
+    {
+      method: 'GET',
+      path: ['api', 'posts', null, 'replies'],
+      handler: async (req, res, params) => {
+        const post = db.prepare('select id, project_id from posts where id = ?').get(params[0]);
+        if (!post) return fail(res, 404, 'POST_NOT_FOUND', '帖子不存在');
+
+        const auth = requireMember(req, res, post.project_id);
+        if (!auth) return;
+
+        const rows = db.prepare('select * from post_replies where post_id = ? order by created_at').all(post.id);
+        return json(res, 200, { postId: post.id, replies: rows.map(replyPayload) });
+      },
+    },
   ];
 
   function originAllowed(req) {
@@ -480,7 +724,7 @@ export function createApp({
     if (req.method === 'OPTIONS') {
       if (!originAllowed(req)) return fail(res, 403, 'ORIGIN_REJECTED', '来源不被允许');
       res.writeHead(204, {
-        'access-control-allow-methods': 'GET,POST,OPTIONS',
+        'access-control-allow-methods': 'GET,POST,PATCH,OPTIONS',
         'access-control-allow-headers': 'content-type,x-csrf-token',
         'access-control-max-age': '600',
       });
