@@ -46,7 +46,7 @@ export interface Issue {
   id: string;
   projectId: string;
   buildId: string;
-  playtestId: string;
+  playtestId?: string;
   title: string;
   category: IssueCategory;
   severity: Severity;
@@ -58,6 +58,7 @@ export interface Issue {
   occurrenceTotal: number;
   testerName: string;
   createdAt: string;
+  draft?: boolean;
   disposition: Disposition;
 }
 
@@ -85,6 +86,7 @@ export type AppAction =
   | { type: 'playtest/add'; playtest: Playtest }
   | { type: 'playtest/status'; playtestId: string; status: Playtest['status'] }
   | { type: 'issue/add'; issue: Issue }
+  | { type: 'issue/update'; issue: Issue }
   | { type: 'issue/disposition'; issueId: string; disposition: Disposition }
   | { type: 'retest/update'; retestId: string; outcome: RetestOutcome; note: string; testedAt?: string }
   | { type: 'state/replace'; state: AppState };
@@ -97,10 +99,15 @@ export const emptyState: AppState = {
   retests: [],
 };
 
-export function validateIssueDraft(issue: Pick<Issue, 'title' | 'observation' | 'evidence'>): string[] {
+export function validateIssueDraftBase(issue: Pick<Issue, 'title' | 'observation'>): string[] {
   const errors: string[] = [];
   if (!issue.title.trim()) errors.push('请填写问题标题');
   if (!issue.observation.trim()) errors.push('请填写实际观察，而不是修改建议');
+  return errors;
+}
+
+export function validateIssueDraft(issue: Pick<Issue, 'title' | 'observation' | 'evidence'>): string[] {
+  const errors = validateIssueDraftBase(issue);
   if (!issue.evidence.trim()) errors.push('请提供原始证据，如时间点、玩家原话或录屏链接');
   return errors;
 }
@@ -150,6 +157,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       };
     case 'issue/add':
       return { ...state, issues: [action.issue, ...state.issues] };
+    case 'issue/update':
+      return {
+        ...state,
+        issues: state.issues.map((issue) => (issue.id === action.issue.id ? action.issue : issue)),
+      };
     case 'issue/disposition':
       return {
         ...state,
@@ -188,7 +200,7 @@ export function getBuildComparison(state: AppState, buildId: string) {
     build,
     previousBuild,
     items,
-    newIssues: state.issues.filter((issue) => issue.buildId === buildId),
+    newIssues: state.issues.filter((issue) => issue.buildId === buildId && !issue.draft),
   };
 }
 
@@ -202,7 +214,7 @@ export function getDashboardMetrics(state: AppState) {
   return {
     activeProjects: state.projects.length,
     runningTests: state.playtests.filter((playtest) => playtest.status !== 'complete').length,
-    pendingIssues: state.issues.filter((issue) => issue.disposition.decision === 'pending').length,
+    pendingIssues: state.issues.filter((issue) => !issue.draft && issue.disposition.decision === 'pending').length,
     completedLoops,
   };
 }

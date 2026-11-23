@@ -6,6 +6,7 @@ import {
   parseStoredState,
   validateDisposition,
   validateIssueDraft,
+  validateIssueDraftBase,
   type AppState,
   type Build,
   type Issue,
@@ -172,5 +173,43 @@ describe('版本迭代闭环', () => {
     expect(parseStoredState(JSON.stringify(fallback), { ...fallback, projects: [] })).toEqual(fallback);
     const empty: AppState = { projects: [], builds: [], playtests: [], issues: [], retests: [] };
     expect(appReducer(fallback, { type: 'state/replace', state: empty })).toEqual(empty);
+  });
+});
+
+describe('项目内讨论：版本时间线与证据帖', () => {
+  it('证据帖可以只绑定版本，不依赖试玩任务', () => {
+    let state: AppState = { projects: [project], builds: [firstBuild], playtests: [], issues: [], retests: [] };
+    const thread: Issue = { ...makeIssue('thread-1'), playtestId: undefined, draft: false };
+    state = appReducer(state, { type: 'issue/add', issue: thread });
+
+    expect(state.issues[0].playtestId).toBeUndefined();
+    expect(state.issues[0].buildId).toBe(firstBuild.id);
+  });
+
+  it('没有原始证据的帖子只能存为草稿，发布必须补证据', () => {
+    const thread = { ...makeIssue('thread-draft'), playtestId: undefined, evidence: '' };
+
+    expect(validateIssueDraftBase(thread)).toEqual([]);
+    expect(validateIssueDraft(thread).join(' ')).toContain('原始证据');
+    expect(validateIssueDraftBase({ ...thread, title: '  ' }).join(' ')).toContain('标题');
+  });
+
+  it('草稿不计入待处置问题，也不算版本对比中的新问题', () => {
+    let state = appReducer(baseState(), { type: 'build/add', build: nextBuild });
+    const draft: Issue = {
+      ...makeIssue('thread-draft'),
+      buildId: nextBuild.id,
+      playtestId: undefined,
+      draft: true,
+    };
+    state = appReducer(state, { type: 'issue/add', issue: draft });
+
+    expect(getDashboardMetrics(state).pendingIssues).toBe(0);
+    expect(getBuildComparison(state, nextBuild.id)?.newIssues).toHaveLength(0);
+
+    state = appReducer(state, { type: 'issue/update', issue: { ...draft, evidence: '录屏 02:10', draft: false } });
+
+    expect(getDashboardMetrics(state).pendingIssues).toBe(1);
+    expect(getBuildComparison(state, nextBuild.id)?.newIssues.map((issue) => issue.id)).toEqual(['thread-draft']);
   });
 });

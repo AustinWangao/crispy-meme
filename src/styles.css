@@ -459,3 +459,10 @@ dd { margin: 6px 0 0; font-size: 13px; line-height: 1.65; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.form-action-buttons { display: flex; gap: 9px; flex-wrap: wrap; }
+.thread-list { display: grid; gap: 13px; margin-top: 20px; }
+.thread-card { padding: 20px 22px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.thread-card.is-draft { border-style: dashed; background: var(--surface-muted); }
+.thread-card h3 { margin: 8px 0 14px; font-size: 16px; line-height: 1.4; }
+.thread-card-actions { display: flex; justify-content: flex-end; margin-top: 14px; }

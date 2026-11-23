@@ -26,6 +26,7 @@ import {
   parseStoredState,
   validateDisposition,
   validateIssueDraft,
+  validateIssueDraftBase,
   type AppState,
   type Build,
   type Decision,
@@ -45,6 +46,7 @@ type ModalState =
   | { type: 'build'; next: boolean }
   | { type: 'playtest' }
   | { type: 'issue' }
+  | { type: 'thread'; issueId?: string }
   | { type: 'disposition'; issueId: string; decision: Exclude<Decision, 'pending'> }
   | null;
 
@@ -363,6 +365,87 @@ function IssueForm({ onSave }: { onSave: (issue: Omit<Issue, 'id' | 'projectId' 
   );
 }
 
+type ThreadPayload = Pick<
+  Issue,
+  'title' | 'category' | 'severity' | 'observation' | 'evidence' | 'interpretation' | 'testerName' | 'draft'
+>;
+
+function ThreadForm({ initial, onSave }: { initial?: Issue; onSave: (payload: ThreadPayload) => void }) {
+  const [errors, setErrors] = useState<string[]>([]);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  const save = (draft: boolean) => {
+    const form = formRef.current;
+    if (!form) return;
+    const data = new FormData(form);
+    const payload: ThreadPayload = {
+      title: formValue(data, 'title'),
+      category: formValue(data, 'category') as IssueCategory,
+      severity: formValue(data, 'severity') as Severity,
+      observation: formValue(data, 'observation'),
+      evidence: formValue(data, 'evidence'),
+      interpretation: formValue(data, 'interpretation'),
+      testerName: formValue(data, 'testerName') || '匿名',
+      draft,
+    };
+    const nextErrors = draft ? validateIssueDraftBase(payload) : validateIssueDraft(payload);
+    if (nextErrors.length) {
+      setErrors(nextErrors);
+      return;
+    }
+    onSave(payload);
+  };
+
+  return (
+    <form className="form-grid" ref={formRef} onSubmit={(event) => { event.preventDefault(); save(false); }}>
+      {errors.length > 0 && <div className="form-error field-full" role="alert">{errors.join('；')}</div>}
+      <div className="field field-full">
+        <label htmlFor="thread-title">问题标题</label>
+        <input id="thread-title" name="title" defaultValue={initial?.title} placeholder="描述可观察的问题，不写抽象评价" />
+      </div>
+      <div className="field">
+        <label htmlFor="thread-category">问题类型</label>
+        <select id="thread-category" name="category" defaultValue={initial?.category ?? '目标与规则'}>
+          {(['功能缺陷', '目标与规则', '操作与反馈', '难度与节奏', '玩家体验', '玩法偏好'] as IssueCategory[]).map((category) => (
+            <option key={category}>{category}</option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor="thread-severity">影响程度</label>
+        <select id="thread-severity" name="severity" defaultValue={initial?.severity ?? 'major'}>
+          {(Object.keys(severityLabels) as Severity[]).map((severity) => (
+            <option key={severity} value={severity}>{severityLabels[severity]}</option>
+          ))}
+        </select>
+      </div>
+      <div className="field field-full">
+        <label htmlFor="thread-observation">实际观察</label>
+        <textarea id="thread-observation" name="observation" rows={3} defaultValue={initial?.observation} placeholder="玩家做了什么？发生在什么任务与情境？" />
+      </div>
+      <div className="field field-full">
+        <label htmlFor="thread-evidence">原始证据</label>
+        <textarea id="thread-evidence" name="evidence" rows={3} defaultValue={initial?.evidence} placeholder="录屏时间点、玩家原话、截图或链接；没有证据只能存为草稿" />
+      </div>
+      <div className="field field-full">
+        <label htmlFor="thread-interpretation">解释假设</label>
+        <textarea id="thread-interpretation" name="interpretation" rows={2} defaultValue={initial?.interpretation} placeholder="可能原因，保留不确定性" />
+      </div>
+      <div className="field field-full">
+        <label htmlFor="thread-tester">测试者</label>
+        <input id="thread-tester" name="testerName" defaultValue={initial?.testerName} placeholder="姓名或匿名编号" />
+      </div>
+      <div className="form-actions field-full">
+        <span>没有原始证据只能存为草稿</span>
+        <div className="form-action-buttons">
+          <button className="button button-secondary" type="button" onClick={() => save(true)}>存为草稿</button>
+          <button className="button button-primary" type="button" onClick={() => save(false)}>发布证据帖</button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
 function DispositionForm({
   issue,
   initialDecision,
@@ -524,6 +607,33 @@ function App() {
     setModal(null);
   };
 
+  const saveThread = (payload: ThreadPayload) => {
+    if (!selectedProject || !selectedBuild || modal?.type !== 'thread') return;
+    const { draft, ...fields } = payload;
+    if (modal.issueId) {
+      const existing = state.issues.find((issue) => issue.id === modal.issueId);
+      if (!existing) return;
+      dispatch({ type: 'issue/update', issue: { ...existing, ...fields, draft } });
+    } else {
+      dispatch({
+        type: 'issue/add',
+        issue: {
+          ...fields,
+          id: createId('issue'),
+          projectId: selectedProject.id,
+          buildId: selectedBuild.id,
+          createdAt: new Date().toISOString(),
+          recommendation: '',
+          draft,
+          occurrenceCount: 1,
+          occurrenceTotal: 1,
+          disposition: { decision: 'pending', reason: '', nextAction: '' },
+        },
+      });
+    }
+    setModal(null);
+  };
+
   const pendingRetestCount = selectedBuild
     ? state.retests.filter((retest) => retest.buildId === selectedBuild.id && retest.outcome === 'pending').length
     : 0;
@@ -642,18 +752,25 @@ function App() {
       );
     }
 
+    const buildThreads = buildIssues.filter((issue) => !issue.draft);
+    const buildDrafts = buildIssues.filter((issue) => issue.draft);
+
     return (
+      <>
       <div className="workspace-columns">
         <aside className="item-list-panel">
-          <div className="panel-heading"><span className="eyebrow">BUILDS · {projectBuilds.length}</span></div>
+          <div className="panel-heading"><span className="eyebrow">版本时间线 · {projectBuilds.length}</span></div>
           <div className="selectable-list">
-            {projectBuilds.map((build) => (
-              <button type="button" key={build.id} className={`selectable-item ${selectedBuild?.id === build.id ? 'selected' : ''}`} onClick={() => selectBuild(build.id)}>
-                <span className="item-index">{build.version}</span>
-                <span><strong>{build.notes}</strong><small>{formatDate(build.createdAt)}{build.previousBuildId ? ' · 迭代版本' : ' · 首个版本'}</small></span>
-                <ChevronRight size={17} />
-              </button>
-            ))}
+            {projectBuilds.map((build) => {
+              const threadCount = state.issues.filter((issue) => issue.buildId === build.id && !issue.draft).length;
+              return (
+                <button type="button" key={build.id} className={`selectable-item ${selectedBuild?.id === build.id ? 'selected' : ''}`} onClick={() => selectBuild(build.id)}>
+                  <span className="item-index">{build.version}</span>
+                  <span><strong>{build.notes}</strong><small>{formatDate(build.createdAt)} · {build.previousBuildId ? '迭代版本' : '首个版本'} · {threadCount} 条证据</small></span>
+                  <ChevronRight size={17} />
+                </button>
+              );
+            })}
           </div>
         </aside>
         {selectedBuild && (
@@ -680,6 +797,40 @@ function App() {
           </section>
         )}
       </div>
+      <section className="content-panel">
+        <div className="panel-heading">
+          <div><span className="eyebrow">EVIDENCE THREADS</span><h2>证据帖</h2></div>
+          <button className="button button-secondary" type="button" onClick={() => setModal({ type: 'thread' })}><Plus size={18} />发一条证据帖</button>
+        </div>
+        <p className="detail-lead">帖子绑定当前版本。没有原始证据只能存为草稿，发布后才进入问题记录。</p>
+        {buildIssues.length === 0 ? (
+          <div className="inline-empty"><FileText size={20} /><span>这个版本还没有讨论。先记录你观察到的行为。</span></div>
+        ) : (
+          <div className="thread-list">
+            {[...buildThreads, ...buildDrafts].map((issue) => (
+              <article className={`thread-card ${issue.draft ? 'is-draft' : ''}`} key={issue.id}>
+                <div className="issue-meta">
+                  {issue.draft ? <StatusChip tone="neutral">草稿</StatusChip> : <StatusChip tone={issue.severity === 'blocker' || issue.severity === 'major' ? 'red' : 'neutral'}>{severityLabels[issue.severity]}</StatusChip>}
+                  <span>{issue.category}</span>
+                  <span>{issue.testerName || '匿名'}</span>
+                </div>
+                <h3>{issue.title}</h3>
+                <div className="evidence-grid">
+                  <div><span>实际观察</span><p>{issue.observation}</p></div>
+                  {issue.evidence && <div><span>原始证据</span><p>{issue.evidence}</p></div>}
+                  {issue.interpretation && <div><span>解释假设</span><p>{issue.interpretation}</p></div>}
+                </div>
+                {issue.draft && (
+                  <div className="thread-card-actions">
+                    <button type="button" className="button button-secondary" onClick={() => setModal({ type: 'thread', issueId: issue.id })}>补充证据并发布</button>
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+      </>
     );
   };
 
@@ -833,6 +984,7 @@ function App() {
       {modal?.type === 'build' && <Modal eyebrow={modal.next ? 'NEXT BUILD' : 'NEW BUILD'} title={modal.next ? '创建下一版' : '保存可玩版本'} onClose={() => setModal(null)}><BuildForm next={modal.next} acceptedIssues={acceptedIssues} onSave={saveBuild} /></Modal>}
       {modal?.type === 'playtest' && <Modal eyebrow={`${selectedBuild?.version ?? ''} · NEW PLAYTEST`} title="发起一次聚焦试玩" onClose={() => setModal(null)}><PlaytestForm onSave={savePlaytest} /></Modal>}
       {modal?.type === 'issue' && <Modal eyebrow={`${selectedPlaytest?.title ?? ''} · NEW ISSUE`} title="记录一条可追溯的问题" onClose={() => setModal(null)}><IssueForm onSave={saveIssue} /></Modal>}
+      {modal?.type === 'thread' && <Modal eyebrow={`${selectedBuild?.version ?? ''} · EVIDENCE THREAD`} title={modal.issueId ? '补充证据并发布' : '发一条证据帖'} onClose={() => setModal(null)}><ThreadForm initial={modal.issueId ? state.issues.find((issue) => issue.id === modal.issueId) : undefined} onSave={saveThread} /></Modal>}
       {modal?.type === 'disposition' && dispositionIssue && <Modal eyebrow="AUTHOR DISPOSITION" title="决定这条问题去向" onClose={() => setModal(null)}><DispositionForm issue={dispositionIssue} initialDecision={modal.decision} onSave={(decision, reason, nextAction) => { dispatch({ type: 'issue/disposition', issueId: dispositionIssue.id, disposition: { decision, reason, nextAction } }); setModal(null); }} /></Modal>}
     </div>
   );
