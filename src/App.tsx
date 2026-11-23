@@ -1061,6 +1061,7 @@ function App() {
       <main className="main-area">
         <header className="topbar">
           <div className="local-status"><span />本地已保存</div>
+          <a className="button button-quiet" href="/playtest/" target="_blank" rel="noreferrer">试玩游戏<ExternalLink size={16} /></a>
           {state.projects.length > 0 && <button className="button button-quiet" type="button" onClick={() => setModal({ type: 'project' })}><Plus size={17} />新建项目</button>}
         </header>
         <div className="page-content">
