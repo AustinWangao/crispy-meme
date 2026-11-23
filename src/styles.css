@@ -473,6 +473,22 @@ dd { margin: 6px 0 0; font-size: 13px; line-height: 1.65; }
 .thread-decision-result p { margin: 6px 0 0; color: #365340; font-size: 12px; line-height: 1.65; }
 .thread-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .thread-toolbar select { min-height: 36px; padding: 0 10px; border: 1px solid #d2d7ce; border-radius: 7px; color: #536158; background: #fff; font-size: 12px; font-family: inherit; }
+
+.identity-panel { margin-top: auto; padding-top: 18px; border-top: 1px solid #e4e6df; display: grid; gap: 8px; }
+.identity-actor { display: grid; gap: 2px; }
+.identity-actor strong { color: #26382c; font-size: 13px; }
+.identity-actor span { color: #7b867d; font-size: 11px; }
+.identity-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.identity-list li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: #4a5a4f; font-size: 12px; }
+.identity-list small { padding: 1px 6px; border-radius: 999px; background: #e8ede5; color: #5a6d5f; font-size: 10px; }
+.identity-form { display: grid; gap: 4px; }
+.identity-form label { color: #7b867d; font-size: 11px; }
+.identity-inline { display: flex; gap: 6px; }
+.identity-inline input { flex: 1; min-width: 0; min-height: 32px; padding: 0 8px; border: 1px solid #d2d7ce; border-radius: 6px; background: #fff; font-size: 12px; font-family: inherit; }
+.identity-link { padding: 4px 8px; border: 1px solid #cfd7cd; border-radius: 6px; background: transparent; color: #47624f; font-size: 11px; cursor: pointer; font-family: inherit; }
+.identity-link:disabled { opacity: .5; cursor: not-allowed; }
+.identity-note { margin: 0; color: #4c6a56; font-size: 11px; line-height: 1.6; }
+.identity-error { margin: 0; color: #a04b3c; font-size: 11px; line-height: 1.6; }
 .thread-replies { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e2e4dd; }
 .thread-replies-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #77827a; font-size: 11px; }
 .reply-item { margin-top: 12px; padding: 12px 14px; border-radius: 8px; background: #f3f3ed; }

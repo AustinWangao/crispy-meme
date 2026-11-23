@@ -40,6 +40,7 @@ import {
   type RetestOutcome,
   type Severity,
 } from './lib/domain';
+import { IdentityPanel } from './IdentityPanel';
 
 const STORAGE_KEY = 'replay-state-v1';
 type View = 'overview' | 'builds' | 'playtests' | 'retests';
@@ -1047,6 +1048,7 @@ function App() {
             <button type="button" key={project.id} className={selectedProject?.id === project.id ? 'selected' : ''} onClick={() => selectProject(project.id)}><span className="project-monogram" aria-hidden="true">{project.name.slice(0, 1)}</span><span>{project.name}</span></button>
           ))}
         </div>
+        <IdentityPanel />
         <div className="sidebar-footer"><HardDrive size={16} /><span>本地工作区<small>数据保存在此浏览器</small></span></div>
       </aside>
 
