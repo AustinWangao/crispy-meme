@@ -466,3 +466,10 @@ dd { margin: 6px 0 0; font-size: 13px; line-height: 1.65; }
 .thread-card.is-draft { border-style: dashed; background: var(--surface-muted); }
 .thread-card h3 { margin: 8px 0 14px; font-size: 16px; line-height: 1.4; }
 .thread-card-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+.thread-card-actions.is-decision { justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 14px; border-top: 1px solid #e2e4dd; }
+.thread-decision-label { margin-right: auto; color: #77827a; font-size: 11px; }
+.thread-decision-result { margin-top: 16px; padding: 13px 16px; border-radius: 7px; background: #e9f0e6; }
+.thread-decision-result strong { color: #4c6a56; font-size: 10px; }
+.thread-decision-result p { margin: 6px 0 0; color: #365340; font-size: 12px; line-height: 1.65; }
+.thread-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.thread-toolbar select { min-height: 36px; padding: 0 10px; border: 1px solid #d2d7ce; border-radius: 7px; color: #536158; background: #fff; font-size: 12px; font-family: inherit; }

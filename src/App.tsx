@@ -524,6 +524,7 @@ function App() {
   const [selectedBuildId, setSelectedBuildId] = useState('');
   const [selectedPlaytestId, setSelectedPlaytestId] = useState('');
   const [modal, setModal] = useState<ModalState>(null);
+  const [threadFilter, setThreadFilter] = useState<'all' | 'pending' | 'accepted' | 'draft'>('all');
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -754,6 +755,12 @@ function App() {
 
     const buildThreads = buildIssues.filter((issue) => !issue.draft);
     const buildDrafts = buildIssues.filter((issue) => issue.draft);
+    const visibleThreads = [...buildThreads, ...buildDrafts].filter((issue) => {
+      if (threadFilter === 'all') return true;
+      if (threadFilter === 'draft') return Boolean(issue.draft);
+      if (threadFilter === 'accepted') return !issue.draft && issue.disposition.decision === 'accepted';
+      return !issue.draft && issue.disposition.decision === 'pending';
+    });
 
     return (
       <>
@@ -800,17 +807,26 @@ function App() {
       <section className="content-panel">
         <div className="panel-heading">
           <div><span className="eyebrow">EVIDENCE THREADS</span><h2>证据帖</h2></div>
-          <button className="button button-secondary" type="button" onClick={() => setModal({ type: 'thread' })}><Plus size={18} />发一条证据帖</button>
+          <div className="thread-toolbar">
+            <select aria-label="筛选证据帖" value={threadFilter} onChange={(event) => setThreadFilter(event.target.value as typeof threadFilter)}>
+              <option value="all">全部</option>
+              <option value="pending">待处置</option>
+              <option value="accepted">已采纳</option>
+              <option value="draft">草稿</option>
+            </select>
+            <button className="button button-secondary" type="button" onClick={() => setModal({ type: 'thread' })}><Plus size={18} />发一条证据帖</button>
+          </div>
         </div>
-        <p className="detail-lead">帖子绑定当前版本。没有原始证据只能存为草稿，发布后才进入问题记录。</p>
-        {buildIssues.length === 0 ? (
-          <div className="inline-empty"><FileText size={20} /><span>这个版本还没有讨论。先记录你观察到的行为。</span></div>
+        <p className="detail-lead">帖子绑定当前版本。没有原始证据只能存为草稿；发布后由作者处置，再纳入下一版复测。</p>
+        {visibleThreads.length === 0 ? (
+          <div className="inline-empty"><FileText size={20} /><span>{buildIssues.length === 0 ? '这个版本还没有讨论。先记录你观察到的行为。' : '当前筛选下没有帖子。'}</span></div>
         ) : (
           <div className="thread-list">
-            {[...buildThreads, ...buildDrafts].map((issue) => (
+            {visibleThreads.map((issue) => (
               <article className={`thread-card ${issue.draft ? 'is-draft' : ''}`} key={issue.id}>
                 <div className="issue-meta">
                   {issue.draft ? <StatusChip tone="neutral">草稿</StatusChip> : <StatusChip tone={issue.severity === 'blocker' || issue.severity === 'major' ? 'red' : 'neutral'}>{severityLabels[issue.severity]}</StatusChip>}
+                  {!issue.draft && <StatusChip tone={issue.disposition.decision === 'accepted' ? 'green' : issue.disposition.decision === 'pending' ? 'orange' : 'neutral'}>{decisionLabels[issue.disposition.decision]}</StatusChip>}
                   <span>{issue.category}</span>
                   <span>{issue.testerName || '匿名'}</span>
                 </div>
@@ -823,6 +839,20 @@ function App() {
                 {issue.draft && (
                   <div className="thread-card-actions">
                     <button type="button" className="button button-secondary" onClick={() => setModal({ type: 'thread', issueId: issue.id })}>补充证据并发布</button>
+                  </div>
+                )}
+                {!issue.draft && issue.disposition.decision === 'pending' && (
+                  <div className="thread-card-actions is-decision">
+                    <span className="thread-decision-label">作者处置</span>
+                    <button type="button" className="decision-button accept" onClick={() => setModal({ type: 'disposition', issueId: issue.id, decision: 'accepted' })}><Check size={16} />采纳</button>
+                    <button type="button" className="decision-button" onClick={() => setModal({ type: 'disposition', issueId: issue.id, decision: 'deferred' })}><Clock3 size={16} />搁置</button>
+                    <button type="button" className="decision-button" onClick={() => setModal({ type: 'disposition', issueId: issue.id, decision: 'rejected' })}><X size={16} />拒绝</button>
+                  </div>
+                )}
+                {!issue.draft && issue.disposition.decision !== 'pending' && (
+                  <div className="thread-decision-result">
+                    <strong>{issue.disposition.decision === 'accepted' ? '下一版动作' : '处置理由'}</strong>
+                    <p>{issue.disposition.decision === 'accepted' ? issue.disposition.nextAction : issue.disposition.reason}</p>
                   </div>
                 )}
               </article>
