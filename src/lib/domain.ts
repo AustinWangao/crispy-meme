@@ -72,12 +72,23 @@ export interface Retest {
   testedAt?: string;
 }
 
+export interface Reply {
+  id: string;
+  issueId: string;
+  projectId: string;
+  buildId: string;
+  author: string;
+  body: string;
+  createdAt: string;
+}
+
 export interface AppState {
   projects: Project[];
   builds: Build[];
   playtests: Playtest[];
   issues: Issue[];
   retests: Retest[];
+  replies: Reply[];
 }
 
 export type AppAction =
@@ -89,6 +100,7 @@ export type AppAction =
   | { type: 'issue/update'; issue: Issue }
   | { type: 'issue/disposition'; issueId: string; disposition: Disposition }
   | { type: 'retest/update'; retestId: string; outcome: RetestOutcome; note: string; testedAt?: string }
+  | { type: 'reply/add'; reply: Reply }
   | { type: 'state/replace'; state: AppState };
 
 export const emptyState: AppState = {
@@ -97,6 +109,7 @@ export const emptyState: AppState = {
   playtests: [],
   issues: [],
   retests: [],
+  replies: [],
 };
 
 export function validateIssueDraftBase(issue: Pick<Issue, 'title' | 'observation'>): string[] {
@@ -178,6 +191,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
             : retest,
         ),
       };
+    case 'reply/add':
+      return { ...state, replies: [...state.replies, action.reply] };
     case 'state/replace':
       return action.state;
   }
@@ -225,7 +240,10 @@ export function parseStoredState(raw: string | null, fallback: AppState): AppSta
     const parsed = JSON.parse(raw) as Partial<AppState>;
     const keys: (keyof AppState)[] = ['projects', 'builds', 'playtests', 'issues', 'retests'];
     if (!keys.every((key) => Array.isArray(parsed[key]))) return fallback;
-    return parsed as AppState;
+    return {
+      ...(parsed as AppState),
+      replies: Array.isArray(parsed.replies) ? parsed.replies : [],
+    };
   } catch {
     return fallback;
   }

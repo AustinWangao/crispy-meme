@@ -34,6 +34,7 @@ import {
   type IssueCategory,
   type Playtest,
   type Project,
+  type Reply,
   type Retest,
   type RetestOutcome,
   type Severity,
@@ -525,6 +526,8 @@ function App() {
   const [selectedPlaytestId, setSelectedPlaytestId] = useState('');
   const [modal, setModal] = useState<ModalState>(null);
   const [threadFilter, setThreadFilter] = useState<'all' | 'pending' | 'accepted' | 'draft'>('all');
+  const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
+  const [replyDraft, setReplyDraft] = useState('');
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -633,6 +636,25 @@ function App() {
       });
     }
     setModal(null);
+  };
+
+  const saveReply = (issueId: string) => {
+    const body = replyDraft.trim();
+    if (!selectedProject || !selectedBuild || !body) return;
+    dispatch({
+      type: 'reply/add',
+      reply: {
+        id: createId('reply'),
+        issueId,
+        projectId: selectedProject.id,
+        buildId: selectedBuild.id,
+        author: '我',
+        body,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    setReplyTargetId(null);
+    setReplyDraft('');
   };
 
   const pendingRetestCount = selectedBuild
@@ -761,6 +783,10 @@ function App() {
       if (threadFilter === 'accepted') return !issue.draft && issue.disposition.decision === 'accepted';
       return !issue.draft && issue.disposition.decision === 'pending';
     });
+    const repliesByIssue = new Map<string, Reply[]>();
+    state.replies.forEach((reply) => {
+      repliesByIssue.set(reply.issueId, [...(repliesByIssue.get(reply.issueId) ?? []), reply]);
+    });
 
     return (
       <>
@@ -853,6 +879,31 @@ function App() {
                   <div className="thread-decision-result">
                     <strong>{issue.disposition.decision === 'accepted' ? '下一版动作' : '处置理由'}</strong>
                     <p>{issue.disposition.decision === 'accepted' ? issue.disposition.nextAction : issue.disposition.reason}</p>
+                  </div>
+                )}
+                {!issue.draft && (
+                  <div className="thread-replies">
+                    <div className="thread-replies-head">
+                      <span>{repliesByIssue.get(issue.id)?.length ? `${repliesByIssue.get(issue.id)?.length} 条回复` : '还没有回复'}</span>
+                      {replyTargetId !== issue.id && (
+                        <button type="button" className="decision-button" onClick={() => { setReplyTargetId(issue.id); setReplyDraft(''); }}>回复</button>
+                      )}
+                    </div>
+                    {(repliesByIssue.get(issue.id) ?? []).map((reply) => (
+                      <div className="reply-item" key={reply.id}>
+                        <div className="reply-item-head"><strong>{reply.author}</strong><span>{formatDate(reply.createdAt)}</span></div>
+                        <p>{reply.body}</p>
+                      </div>
+                    ))}
+                    {replyTargetId === issue.id && (
+                      <form className="reply-form" onSubmit={(event) => { event.preventDefault(); saveReply(issue.id); }}>
+                        <textarea aria-label="回复内容" rows={3} placeholder="补充证据、提出反问，或说明下一步。" value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} />
+                        <div className="reply-form-actions">
+                          <button type="submit" className="button button-primary">发送回复</button>
+                          <button type="button" className="button button-secondary" onClick={() => { setReplyTargetId(null); setReplyDraft(''); }}>取消</button>
+                        </div>
+                      </form>
+                    )}
                   </div>
                 )}
               </article>

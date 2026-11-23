@@ -170,4 +170,43 @@ describe('复玩工作台', () => {
     await user.selectOptions(filter, 'accepted');
     expect(screen.getByText('第三关缺少提示')).toBeInTheDocument();
   });
+
+  it('在证据帖下回复，并写入本地存储', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: '新建项目' }));
+    await user.type(screen.getByLabelText('项目名称'), '星轨修理铺');
+    await user.type(screen.getByLabelText('类型'), '解谜');
+    await user.type(screen.getByLabelText('项目简介'), '修复星轨的短流程解谜原型');
+    await user.type(screen.getByLabelText('目标玩家'), '喜欢轻量解谜的新玩家');
+    await user.type(screen.getByLabelText('目标体验'), '发现规则后产生掌握感');
+    await submitForm(/^创建项目$/);
+
+    await user.click(screen.getByRole('button', { name: '添加首个版本' }));
+    await user.type(screen.getByLabelText('版本号'), '0.1.0');
+    await user.type(screen.getByLabelText('可玩链接'), 'https://example.com/game-v1');
+    await user.type(screen.getByLabelText('本版修改'), '首个可玩版本');
+    await submitForm(/^保存版本$/);
+
+    await user.click(screen.getByRole('button', { name: '发一条证据帖' }));
+    await user.type(screen.getByLabelText('问题标题'), '第二个场景缺少引导');
+    await user.type(screen.getByLabelText('实际观察'), '两名测试者停留超过一分钟');
+    await user.type(screen.getByLabelText('原始证据'), '录屏 02:10');
+    await user.click(screen.getByRole('button', { name: '发布证据帖' }));
+
+    expect(screen.getByText('还没有回复')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '回复' }));
+    await user.type(screen.getByLabelText('回复内容'), '第二次测试也停在同一处，怀疑不是偶发');
+    await user.click(screen.getByRole('button', { name: '发送回复' }));
+
+    expect(screen.getByText('1 条回复')).toBeInTheDocument();
+    expect(screen.getByText('第二次测试也停在同一处，怀疑不是偶发')).toBeInTheDocument();
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem(storageKey) as string);
+      expect(saved.replies).toHaveLength(1);
+      expect(saved.replies[0].issueId).toBe(saved.issues[0].id);
+    });
+  });
 });

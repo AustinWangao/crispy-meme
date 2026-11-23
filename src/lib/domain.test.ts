@@ -12,6 +12,7 @@ import {
   type Issue,
   type Playtest,
   type Project,
+  type Reply,
 } from './domain';
 
 const project: Project = {
@@ -79,6 +80,7 @@ function baseState(): AppState {
     playtests: [playtest],
     issues: [makeIssue('issue-1', 'accepted'), makeIssue('issue-2', 'accepted')],
     retests: [],
+    replies: [],
   };
 }
 
@@ -150,7 +152,7 @@ describe('版本迭代闭环', () => {
   });
 
   it('支持创建项目、发起试玩并记录作者处置', () => {
-    let state: AppState = { projects: [], builds: [], playtests: [], issues: [], retests: [] };
+    let state: AppState = { projects: [], builds: [], playtests: [], issues: [], retests: [], replies: [] };
     state = appReducer(state, { type: 'project/add', project });
     state = appReducer(state, { type: 'build/add', build: firstBuild });
     state = appReducer(state, { type: 'playtest/add', playtest });
@@ -171,14 +173,14 @@ describe('版本迭代闭环', () => {
     const fallback = baseState();
     expect(parseStoredState('{broken', fallback)).toEqual(fallback);
     expect(parseStoredState(JSON.stringify(fallback), { ...fallback, projects: [] })).toEqual(fallback);
-    const empty: AppState = { projects: [], builds: [], playtests: [], issues: [], retests: [] };
+    const empty: AppState = { projects: [], builds: [], playtests: [], issues: [], retests: [], replies: [] };
     expect(appReducer(fallback, { type: 'state/replace', state: empty })).toEqual(empty);
   });
 });
 
 describe('项目内讨论：版本时间线与证据帖', () => {
   it('证据帖可以只绑定版本，不依赖试玩任务', () => {
-    let state: AppState = { projects: [project], builds: [firstBuild], playtests: [], issues: [], retests: [] };
+    let state: AppState = { projects: [project], builds: [firstBuild], playtests: [], issues: [], retests: [], replies: [] };
     const thread: Issue = { ...makeIssue('thread-1'), playtestId: undefined, draft: false };
     state = appReducer(state, { type: 'issue/add', issue: thread });
 
@@ -212,4 +214,27 @@ describe('项目内讨论：版本时间线与证据帖', () => {
     expect(getDashboardMetrics(state).pendingIssues).toBe(1);
     expect(getBuildComparison(state, nextBuild.id)?.newIssues.map((issue) => issue.id)).toEqual(['thread-draft']);
   });
+
+  it('回复挂在证据帖上，旧缓存缺少回复字段时自动补空', () => {
+    const reply: Reply = {
+      id: 'reply-1',
+      issueId: 'issue-1',
+      projectId: project.id,
+      buildId: firstBuild.id,
+      author: '我',
+      body: '同一场景第二次测试也停在这里',
+      createdAt: '2026-11-04T09:00:00.000Z',
+    };
+
+    const state = appReducer(baseState(), { type: 'reply/add', reply });
+    expect(state.replies).toEqual([reply]);
+
+    const legacy = JSON.stringify({ ...baseState(), replies: undefined });
+    expect(parseStoredState(legacy, emptyLegacyState()).replies).toEqual([]);
+    expect(parseStoredState(JSON.stringify(state), baseState()).replies).toHaveLength(1);
+  });
 });
+
+function emptyLegacyState(): AppState {
+  return { projects: [], builds: [], playtests: [], issues: [], retests: [], replies: [] };
+}
